@@ -7,71 +7,85 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S')
 
 class Client:
+        base_url = "https://api.automatic.com"
         def __init__(self, access_token=None, refresh_token=None, client_id=None, client_secret=None):
                 self.access_token = access_token
                 self.refresh_token = refresh_token
                 self.client_id = client_id
                 self.client_secret = client_secret
-        def set_refresh_token_callback():
-                pass
-        def refresh_token():
-                pass
-        def get_vehicles(self):
-                return Vehicle._fetch_all(self)
-        def get_trips(self):
-                return Trip._fetch_all(self)
-        def get_devices(self):
-                return Device._fetch_all(self)
+        def set_refresh_token_callback(self, cb):
+                self.rf_cb = cb
+        def refresh_token(self):
+                cb(access_token, refresh_token, expiry_date)
+        def get_tags(self, **kwargs):
+                return Tag._fetch_all(self, **kwargs)
+        def get_vehicles(self, **kwargs):
+                return Vehicle._fetch_all(self, **kwargs)
+        def get_trips(self, **kwargs):
+                return Trip._fetch_all(self, **kwargs)
+        def get_devices(self, **kwargs):
+                return Device._fetch_all(self, **kwargs)
         def _get_protocol(self, cls):
                 return Protocol(cls, self)
-        def get_vehicle(self, id):
-                return Vehicle._fetch(id, self)
-        def get_trip(self, id):
-                return Trip._fetch(id, self)
-        def get_device(self, id):
-                return Device._fetch(id, self)
-class Protocol:
-        base_url = "https://api.automatic.com"
-        def __init__(self, cls, client):
-                self.cls = cls
-                self.client = client
-                logging.info("Protocol init for class %s" % self.cls.__name__)
+        def get_vehicle(self, _id):
+                return Vehicle._fetch(_id, self)
+        def get_trip(self, _id):
+                return Trip._fetch(_id, self)
+        def get_device(self, _id):
+                return Device._fetch(_id, self)
+        def get_user(self, _id):
+                return User._fetch(_id, self)
+        def get_me(self):
+                return User._fetch("me", self)
         def _request(self, uri, params={}, headers={}):
-                headers.update({"Authorization":"Bearer %s" % self.client.access_token})
+                headers.update({"Authorization":"Bearer %s" % self.access_token})
                 if not params.get("limit", None):
                         params["limit"] = "200"
                 logging.info("GET %s" % uri)
                 r = requests.get(uri, params=params, headers=headers)
                 j = r.json()
                 return j
-        def get(self, id=None):
-                logging.info("fetching %s for %s" % (self.cls.path, self.cls.__name__))
-                if id:
-                        r = self._request(Protocol.base_url+self.cls.path+"/"+id)
-                        return self.cls.build(r, client=self.client)
+        def _get_entity(self, cls, _id, params={}):
+                 r = self._request(self.base_url+cls.path+"/"+_id, params=params)
+                 return cls.build(r, client=self)
+        def _get_entities(self, cls, params={}):
+                r = self._request(self.base_url+cls.path, params=params)
+                if r.get("results", None):
+                       results = [cls.build(i, client=self) for i in r['results']]
+                       while r['_metadata']['next']:
+                               r = self._request(r['_metadata']['next'])
+                               results.extend([cls.build(i, client=self) for i in r['results']])
+                       return results
                 else:
-                        r = self._request(Protocol.base_url+self.cls.path)
-                        results = [self.cls.build(i, client=self.client) for i in r['results']]
-                        while r['_metadata']['next']:
-                                r = self._request(r['_metadata']['next'])
-                                results.extend([self.cls.build(i, client=self.client) for i in r['results']])
-                        return results
+                       return cls.build(r)
+        def _get_sub_entities(self, cls, parent_id, params={}):
+                r = self._request(self.base_url+(cls.path % parent_id), params=params)
+                if r.get("results", None):
+                       results = [cls.build(i, parent_id, client=self) for i in r['results']]
+                       while r['_metadata']['next']:
+                               r = self._request(r['_metadata']['next'])
+                               results.extend([cls.build(i, parent_id, client=self) for i in r['results']])
+                       return results
+                else:
+                       return cls.build(r, parent_id)
+
+        def _get_sub_entity(self, cls, parent_id, _id=None, params={}):
+                r = self._request(self.base_url+(cls.path % parent_id), params=params)
+                return cls.build(r, parent_id)
 
 class Entity:
         def __init__(self):
                 self.client = None
         def to_dict(self):
-                pass
+                return dict([(key, value) for key, value in self.__dict__.items() if key in self.keys]
         def _set_client(self, client):
                 self.client = client
         @classmethod
-        def _fetch_all(cls, client):
-                p = client._get_protocol(cls)
-                return p.get()
+        def _fetch_all(cls, client, **kwargs):
+                return client._get_entities(cls, params=kwargs)
         @classmethod
-        def _fetch(cls, id, client):
-                p = client._get_protocol(cls)
-                p.get(id=id)
+        def _fetch(cls, _id, client):
+                return client._get_entity(cls, _id=_id)
         @classmethod
         def build(cls, d, client=None):
                 instance = cls.from_dict(d)
@@ -81,16 +95,12 @@ class Entity:
         @classmethod
         def from_dict(cls, d):
                 instance = cls()
-                instance.id = d['id']
+                for key in self.keys:
+                        if key in d:
+                                setattr(self, key, d[key])
                 return instance
-        def _get_protocol(self):
-                if self.client:
-                        return self.client._get_protocol(self.__class__, self.client)
-                else:
-                        raise Exception("Entity does not have a valid client reference")
         def update(self):
-                p = self._get_protocol()
-                replacement = p.get(id=self.id)
+                replacement = self.client._get_entity(_id=self.id)
                 self.__dict__.update(replacement.__dict__)
         def __str__(self):
                 return '%s(id=%s)' % (self.__class__.__name__, self.id)
@@ -98,27 +108,108 @@ class Entity:
                 return self.__str__()
 class Trip(Entity):
         path = '/trip'
-        def __init__(self):
-                pass
+        keys = ["url",
+                "id",
+                "driver",
+                "user",
+                "started_at",
+                "ended_at",
+                "distance_m",
+                "duration_s",
+                "vehicle",
+                "start_location",
+                "start_address",
+                "end_location",
+                "end_address",
+                "path",
+                "fuel_cost_usd",
+                "fuel_volume_l",
+                "average_kmpl",
+                "average_from_epa_kmpl",
+                "score_events",
+                "score_speeding",
+                "hard_brakes",
+                "hard_accels",
+                "duration_over_70_s",
+                "duration_over_75_s",
+                "duration_over_80_s",
+                "vehicle_events",
+                "start_timezone",
+                "end_timezone",
+                "city_fraction",
+                "highway_fraction",
+                "night_driving_fraction",
+                "idling_time_s",
+                "tags"]
+
         def get_tags(self):
                 return self.tags
         def get_tag(self, tag):
-                p = self._get_protocol()
+                return TripTag._fetch(self.client, self.id, tag)._to_tag()
 
 class Tag(Entity):
         path = '/tag'
-        def __init__(self):
-                pass
+        keys = ['tag']
 class Vehicle(Entity):
         path = '/vehicle'
-        def __init__(self):
-                pass
+        def get_mil_events(self, **kwargs):
+                return MILEvent._fetch_all(self.client, self.id, **kwargs)
 
 class Device(Entity):
-        path = '/device'
-        def __init__(self):
-                pass
+        path = '/user/me/device'
+        keys = ['id', 'version', 'direct_access_token', 'url', 'app_encryption_key']
 
+class User(Entity):
+        path = '/user'
+        keys = ['email','email_verified','first_name','id','last_name','url','username']
+        def get_metadata(self):
+                return UserMetadata._fetch(self.client,  self.id)
+#        def get_profile(self):
+#                return UserProfile._fetch(self.client, self.id)
+class SubEntity(Entity):
+        @classmethod
+        def build(cls, d, parent_id, client=None):
+                instance = cls.from_dict(d, parent_id)
+                if client:
+                        instance._set_client(client)
+                return instance
+        @classmethod
+        def from_dict(cls, d, parent_id):
+                instance = super(SubEntity, self)
+                instance.parent_id = parent_id
+                return instance
+        def to_dict(self):
+                d = super(SubEntity, self).to_dict()
+                d['parent_id'] = self.parent_id
+        @classmethod
+        def _fetch_all(cls, client, parent_id, **kwargs):
+                return client._get_sub_entities(cls, parent_id, params=kwargs)
+        @classmethod
+        def _fetch(cls, client, parent_id):
+                return client._get_sub_entity(cls, parent_id)
 
+        def update(self):
+                replacement = self.client._get_sub_entity(cls)
+                self.__dict__.update(replacement.__dict__)
 
-
+class SubEntityWithID(SubEntity):
+        @classmethod
+        def _fetch(cls, client, parent_id, _id):
+                return client.get_sub_entity(cls, _id=_id)
+        def update(self):
+                replacement = self.client.get_sub_entity(cls, id=self.id)
+                self.__dict__.update(replacement.__dict__)
+class TripTag(SubEntityWithID):
+        path = "/trip/%s/tag"
+        keys = ['tag', 'created_at']
+        def _to_tag(self):
+                t = Tag.from_dict(self.__dict__)
+                return t
+#class UserProfile(SubEntity):
+#        path = "/user/%s/profile"
+class MILEvent(SubEntity):
+        path = "/vehicle/%s/mil"
+        keys = ['code', 'on', 'description', 'created_at']
+class UserMetadata(SubEntity):
+        path = "/user/%s/metadata"
+        keys = ['app_version','authenticated_clients','device_type','firmware_version','is_latest_app_version','is_staff','os_version','phone_platform','url','user']
