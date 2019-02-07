@@ -151,6 +151,7 @@ class Tag(Entity):
         path = '/tag'
         keys = ['tag']
 class Vehicle(Entity):
+        keys = ["url","id","vin","created_at","updated_at","make","model","year","submodel","display_name","fuel_grade","fuel_level_percent","battery_voltage","active_dtcs"]
         path = '/vehicle'
         def get_mil_events(self, **kwargs):
                 return MILEvent._fetch_all(self.client, self.id, **kwargs)
