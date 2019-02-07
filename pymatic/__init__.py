@@ -77,7 +77,7 @@ class Entity:
         def __init__(self):
                 self.client = None
         def to_dict(self):
-                return dict([(key, value) for key, value in self.__dict__.items() if key in self.keys]
+                return dict([(key, value) for key, value in self.__dict__.items() if key in self.keys])
         def _set_client(self, client):
                 self.client = client
         @classmethod
@@ -95,9 +95,9 @@ class Entity:
         @classmethod
         def from_dict(cls, d):
                 instance = cls()
-                for key in self.keys:
+                for key in cls.keys:
                         if key in d:
-                                setattr(self, key, d[key])
+                                setattr(instance, key, d[key])
                 return instance
         def update(self):
                 replacement = self.client._get_entity(_id=self.id)
@@ -175,12 +175,13 @@ class SubEntity(Entity):
                 return instance
         @classmethod
         def from_dict(cls, d, parent_id):
-                instance = super(SubEntity, self)
+                instance = super().from_dict(d)
                 instance.parent_id = parent_id
                 return instance
         def to_dict(self):
                 d = super(SubEntity, self).to_dict()
                 d['parent_id'] = self.parent_id
+                return d
         @classmethod
         def _fetch_all(cls, client, parent_id, **kwargs):
                 return client._get_sub_entities(cls, parent_id, params=kwargs)
