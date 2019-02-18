@@ -15,7 +15,7 @@ class Client:
                 self.client_secret = client_secret
         def set_refresh_token_callback(self, cb):
                 self.rf_cb = cb
-        def refresh_token(self):
+        def refresh(self):
                 if not self.client_secret:
                         raise Exception("Client Secret not set. Cannot refresh token")
                 if not self.client_id:
