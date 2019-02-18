@@ -16,7 +16,17 @@ class Client:
         def set_refresh_token_callback(self, cb):
                 self.rf_cb = cb
         def refresh_token(self):
-                cb(access_token, refresh_token, expiry_date)
+                if not self.client_secret:
+                        raise Exception("Client Secret not set. Cannot refresh token")
+                if not self.client_id:
+                        raise Exception("Client ID not set. Cannot refresh token")
+                if not self.refresh_token:
+                        raise Exception("Refresh token not set. Cannot refresh token")
+                r = requests.post("https://accounts.automatic.com/oauth/access_token", params={"client_id":self.client_id, "client_secret":self.client_secret, "grant_type":"refresh_token", "refresh_token":self.refresh_token})
+                if not r.status_code == 200:
+                        raise Exception("Token refresh failed. Status code: %s Response: %s"  % (r.status_code, r.json()))
+                if self.rf_cb:
+                        self.rf_cb(r.json())
         def get_tags(self, **kwargs):
                 return Tag._fetch_all(self, **kwargs)
         def get_vehicles(self, **kwargs):
