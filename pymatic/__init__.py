@@ -1,4 +1,5 @@
 import logging
+import copy
 import requests
 import pprint
 logging.basicConfig(
@@ -13,6 +14,7 @@ class Client:
                 self.refresh_token = refresh_token
                 self.client_id = client_id
                 self.client_secret = client_secret
+                self.rf_cb = None
         def set_refresh_token_callback(self, cb):
                 self.rf_cb = cb
         def refresh(self):
@@ -22,10 +24,17 @@ class Client:
                         raise Exception("Client ID not set. Cannot refresh token")
                 if not self.refresh_token:
                         raise Exception("Refresh token not set. Cannot refresh token")
-                r = requests.post("https://accounts.automatic.com/oauth/access_token", params={"client_id":self.client_id, "client_secret":self.client_secret, "grant_type":"refresh_token", "refresh_token":self.refresh_token})
-                if not r.status_code == 200:
+                logging.info(str({"client_id":self.client_id, "client_secret":self.client_secret, "grant_type":"refresh_token", "refresh_token":self.refresh_token}))
+                r = requests.post("https://accounts.automatic.com/oauth/access_token", json={"client_id":self.client_id, "client_secret":self.client_secret, "grant_type":"refresh_token", "refresh_token":self.refresh_token})
+                if r.status_code == 200:
+                        res = r.json()
+                        logging.info("refresh successful")
+                        self.refresh_token = res['refresh_token']
+                        self.access_token = res['access_token']
+                else:
                         raise Exception("Token refresh failed. Status code: %s Response: %s"  % (r.status_code, r.json()))
                 if self.rf_cb:
+                        logging.info("running callback")
                         self.rf_cb(r.json())
         def get_tags(self, **kwargs):
                 return Tag._fetch_all(self, **kwargs)
@@ -35,8 +44,8 @@ class Client:
                 return Trip._fetch_all(self, **kwargs)
         def get_devices(self, **kwargs):
                 return Device._fetch_all(self, **kwargs)
-        def _get_protocol(self, cls):
-                return Protocol(cls, self)
+#        def _get_protocol(self, cls):
+#                return Protocol(cls, self)
         def get_vehicle(self, _id):
                 return Vehicle._fetch(_id, self)
         def get_trip(self, _id):
@@ -48,33 +57,65 @@ class Client:
         def get_me(self):
                 return User._fetch("me", self)
         def _request(self, uri, params={}, headers={}):
+                new_params = copy.deepcopy(params) # make a copy to avoid deleting total_limit in later runs
                 headers.update({"Authorization":"Bearer %s" % self.access_token})
-                if not params.get("limit", None):
-                        params["limit"] = "200"
-                logging.info("GET %s" % uri)
-                r = requests.get(uri, params=params, headers=headers)
+                if new_params.get("total_limit"): #some endpoints fail with the extra params
+                        del new_params['total_limit']
+                logging.info("GET %s %s" % (uri, new_params))
+                r = requests.get(uri, params=new_params, headers=headers)
+                if r.status_code >=400:
+                        raise Exception("request failed. Status code: %s Response: %s"  % (r.status_code, r.json()))
                 j = r.json()
                 return j
         def _get_entity(self, cls, _id, params={}):
                  r = self._request(self.base_url+cls.path+"/"+_id, params=params)
                  return cls.build(r, client=self)
         def _get_entities(self, cls, params={}):
+                if params.get("limit"):
+                        params['total_limit'] = params.get("limit")
+                        if params['total_limit'] < 200:
+                                params['limit'] = params['total_limit']
+                        else:
+                                params['limit'] = 200
+                if params.get("per_page"):
+                        params['limit'] = params.get("per_page")
+                if not params.get("limit"):
+                        params['limit'] = 200
                 r = self._request(self.base_url+cls.path, params=params)
                 if r.get("results", None):
-                       results = [cls.build(i, client=self) for i in r['results']]
-                       while r['_metadata']['next']:
-                               r = self._request(r['_metadata']['next'])
-                               results.extend([cls.build(i, client=self) for i in r['results']])
-                       return results
+                        results = [cls.build(i, client=self) for i in r['results']]
+                        if params.get("total_limit") and len(results) >= params.get("total_limit"):
+                                return results[:params.get("total_limit")]
+                        while r['_metadata']['next']:
+                                r = self._request(r['_metadata']['next'])
+                                results.extend([cls.build(i, client=self) for i in r['results']])
+                                if params.get("total_limit") and len(results) >= params.get("total_limit"):
+                                        return results[:params.get("total_limit")]
+                        return results
                 else:
                        return cls.build(r)
         def _get_sub_entities(self, cls, parent_id, params={}):
+                if params.get("limit"):
+                        params['total_limit'] = params.get("limit")
+                        if params['total_limit'] < 200:
+                                params['limit'] = params['total_limit']
+                        else:
+                                params['limit'] = 200
+                if params.get("per_page"):
+                        params['limit'] = params.get("per_page")
+                logging.info("subentity class %s" % cls)
+                if not params.get("limit") and not cls == MILEvent:
+                        params['limit'] = 200
                 r = self._request(self.base_url+(cls.path % parent_id), params=params)
                 if r.get("results", None):
                        results = [cls.build(i, parent_id, client=self) for i in r['results']]
+                       if params.get("total_limit") and len(results) >= params.get("total_limit"):
+                                return results[:params.get("total_limit")]
                        while r['_metadata']['next']:
                                r = self._request(r['_metadata']['next'])
                                results.extend([cls.build(i, parent_id, client=self) for i in r['results']])
+                               if params.get("total_limit") and len(results) >= params.get("total_limit"):
+                                     return results[:params.get("total_limit")]
                        return results
                 else:
                        return cls.build(r, parent_id)
@@ -151,9 +192,8 @@ class Trip(Entity):
                 "night_driving_fraction",
                 "idling_time_s",
                 "tags"]
-
         def get_tags(self):
-                return self.tags
+                return [self.get_tag(t) for t in self.tags]
         def get_tag(self, tag):
                 return TripTag._fetch(self.client, self.id, tag)._to_tag()
 
@@ -164,6 +204,8 @@ class Vehicle(Entity):
         keys = ["url","id","vin","created_at","updated_at","make","model","year","submodel","display_name","fuel_grade","fuel_level_percent","battery_voltage","active_dtcs"]
         path = '/vehicle'
         def get_mil_events(self, **kwargs):
+                if kwargs.get("limit"):
+                        del kwargs['limit']
                 return MILEvent._fetch_all(self.client, self.id, **kwargs)
 
 class Device(Entity):
@@ -175,8 +217,6 @@ class User(Entity):
         keys = ['email','email_verified','first_name','id','last_name','url','username']
         def get_metadata(self):
                 return UserMetadata._fetch(self.client,  self.id)
-#        def get_profile(self):
-#                return UserProfile._fetch(self.client, self.id)
 class SubEntity(Entity):
         @classmethod
         def build(cls, d, parent_id, client=None):
@@ -203,6 +243,8 @@ class SubEntity(Entity):
         def update(self):
                 replacement = self.client._get_sub_entity(cls)
                 self.__dict__.update(replacement.__dict__)
+        def __str__(self):
+                return '%s()' % (self.__class__.__name__)
 
 class SubEntityWithID(SubEntity):
         @classmethod
@@ -211,14 +253,15 @@ class SubEntityWithID(SubEntity):
         def update(self):
                 replacement = self.client.get_sub_entity(cls, id=self.id)
                 self.__dict__.update(replacement.__dict__)
+        def __str__(self):
+                return '%s(id=%s)' % (self.__class__.__name__, self.id)
+
 class TripTag(SubEntityWithID):
         path = "/trip/%s/tag"
         keys = ['tag', 'created_at']
         def _to_tag(self):
                 t = Tag.from_dict(self.__dict__)
                 return t
-#class UserProfile(SubEntity):
-#        path = "/user/%s/profile"
 class MILEvent(SubEntity):
         path = "/vehicle/%s/mil"
         keys = ['code', 'on', 'description', 'created_at']

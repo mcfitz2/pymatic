@@ -1,7 +1,7 @@
 from setuptools import setup
 
 setup(name='pymatic',
-      version='0.1',
+      version='0.1.1',
       description='Python library for Automatic',
       url='https://github.com/mcfitz2/pymatic',
       author='Micah Fitzgerald',
